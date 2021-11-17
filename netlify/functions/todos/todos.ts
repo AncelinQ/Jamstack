@@ -119,7 +119,8 @@ try {
       },
       body: JSON.stringify({error : `The method ${event.httpMethod} is not allowed`})
     }
-  }else{
+  }
+  if (error instanceof NotFoundException){
     return{
       statusCode: 404,
       headers: {
@@ -128,5 +129,6 @@ try {
       body: JSON.stringify({error : `Page not found`})
     }
   }
+  throw error;
 }
 }
