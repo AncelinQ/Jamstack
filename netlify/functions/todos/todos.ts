@@ -1,24 +1,12 @@
 import { Handler } from '@netlify/functions'
-import dotenv from 'dotenv';
 import { Todo, TodoInput } from '../../../src/types/api';
 
 // Require the driver
 import faunadb from 'faunadb';
+import FaunaClient from '../../../scripts/fauna-client.mjs';
 const fql = faunadb.query;
 
-// Read environment variables from .env file
-dotenv.config();
-
-// Acquire the secret and optional endpoint from environment variables
-const secret = process.env.FAUNA_SECRET;
-
-// Instantiate a client
-const client = new faunadb.Client({
-  secret,
-  domain: 'db.eu.fauna.com',
-  port: 443,
-  scheme: 'https',
-});
+const client = FaunaClient
 
 class NotFoundException extends Error {
 
