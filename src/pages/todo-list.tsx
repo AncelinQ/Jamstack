@@ -1,22 +1,42 @@
-import { FC } from 'react';
-import useSWR from 'swr';
-import { Todo } from '../types/api';
-import lambdaFetcher from '../utils/lambda-fetcher';
+import { FC } from "react";
+import { Container, ListGroup } from "react-bootstrap";
+import { AddTodoForm, TodoListItem } from "../components/todo-list";
+import { TodoListContextProvider, useTodoListContext } from "../components/todo-list/context";
 
 const TodoListPage: FC = () => {
-  const { data } = useSWR<Todo[], Error>('/todos', lambdaFetcher);
+  return (
+    <TodoListContextProvider>
+      <TodoListPageContent />
+    </TodoListContextProvider>
+  )
+}
 
-  if (typeof data === 'undefined') {
+const TodoListPageContent: FC = () => {
+  const { todos, isValidating } = useTodoListContext();
+
+  if (todos.length === 0 && isValidating) {
     return <div>Loading...</div>;
   }
 
   return (
-    <ul>
-      {data.map((todo) => (
-        <li key={todo.id}>{todo.text}</li>
-      ))}
-    </ul>
-  );
-};
+    <Container>
+      <h1 className="mt-4 mb-4">Todo list</h1>
+      <ListGroup className="mb-2">
+        {
+          todos.map(
+            todo => (
+              <TodoListItem
+                key={todo.ref['@ref'].id}
+                todo={todo}
+              />
+            )
+          )
+        }
+      </ListGroup>
+
+      <AddTodoForm />
+    </Container>
+  )
+}
 
 export default TodoListPage;

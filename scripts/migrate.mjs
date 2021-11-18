@@ -1,7 +1,7 @@
 import createConnectionPool, { sql } from "@databases/pg";
 import dotenv from 'dotenv';
 
-// read environment variables from .env file
+// Read environment variables from .env file
 dotenv.config();
 
 const {
@@ -9,30 +9,28 @@ const {
   DB_PASSWORD,
   DB_HOST,
   DB_PORT,
-  DB_NAME
-
+  DB_NAME,
 } = process.env;
 
-
-// this script migrates the database schema to the db server
-
-const run = async () =>
-{
-  console.info('connecting to database...');
+// This script migrates the database schema to the database server
+const run = async () => {
+  // Establish connection with database
+  console.info('Connecting to database...');
   const db = createConnectionPool(
     `postgres://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}`,
   );
 
-  //Send sql query to the db
-  console.info('Migrating schema...');
+  // Send SQL query to database
+  console.info('Migrating schema...')
   await db.query(sql.file('schema.sql'));
 
-  console.info('Releasing client...');
+  // Terminate connection with database
+  console.info('Releasing client...')
   await db.dispose();
-};
+}
 
-run().catch((err) =>
-{
+// Run main process
+run().catch((err) => {
   console.error(err);
   process.exit(1);
 });

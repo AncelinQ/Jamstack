@@ -1,134 +1,222 @@
 import { Handler } from '@netlify/functions'
-import createConnectionPool, { sql } from "@databases/pg";
 import dotenv from 'dotenv';
-import tables from '@databases/pg-typed';
-import DatabaseSchema, {serializeValue} from '../../../src/__generated__';
-import Todos from '../../../src/__generated__/todos';
+import { Todo, TodoInput } from '../../../src/types/api';
 
-// read environment variables from .env file
+// Require the driver
+import faunadb from 'faunadb';
+const fql = faunadb.query;
+
+// Read environment variables from .env file
 dotenv.config();
 
-const {
-  DB_USERNAME,
-  DB_PASSWORD,
-  DB_HOST,
-  DB_PORT,
-  DB_NAME
+// Acquire the secret and optional endpoint from environment variables
+const secret = process.env.FAUNA_SECRET;
 
-} = process.env;
+// Instantiate a client
+const client = new faunadb.Client({
+  secret,
+  domain: 'db.eu.fauna.com',
+  port: 443,
+  scheme: 'https',
+});
 
-//GET /todos => récupère toutes les taches à faire
-//GET /todos/:id => récupère une taches en particulier
-//POST /todos => Créer une tache à faire
-//PATCH /todos/:id => modifier une tache à faire en particulier
-//PUT /todos/:id => remplacer une tache à faire en particulier
-//Delete /todos/:id => supprimer une tache à faire en particulier
+class NotFoundException extends Error {
 
-class MethodNotAllowedException extends Error{
+}
+
+class MethodNotAllowedException extends Error {
   public httpMethod: string;
-  constructor(httpMethod: string){
-    super()
-    this.httpMethod = httpMethod;
 
+  constructor(httpMethod: string) {
+    super();
+    this.httpMethod = httpMethod;
   }
 }
-class NotFoundException extends Error{}
 
+class BadRequestException extends Error {
+  public reason: string;
+  constructor(reason: string){
+    super();
+    this.reason = reason;
+  }
+}
+
+const validatePayload = (payload: any, partial: boolean = false): TodoInput => {
+  if((partial===false && (
+    typeof payload.text !== 'string' 
+    || typeof payload.done !== 'boolean'
+  )) 
+  || (partial===true && (
+    (typeof payload.text !== 'undefined' 
+    && typeof payload.text !== 'string')
+    ||(typeof payload.done !== 'undefined' 
+    && typeof payload.done !== 'boolean'))))
+  
+  {
+    throw new BadRequestException('Payload incorrectly formed')
+  }
+  
+  return payload;
+}
 
 export const handler: Handler = async (event, context) => {
 
-  const db = createConnectionPool(
-    `postgres://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}`,
-  );
+  try {
+    let match: RegExpMatchArray;
+    let result:  Todo[] | Todo ;
+    let statusCode = 200;
+    let partial = false;
+    // If lambda was called without an ID
+    if (event.path.match(/^\/\.netlify\/functions\/[^\/]+$/)) {
+      switch (event.httpMethod) {
+        // Find all
+        case 'GET':
+          result = (await client.query<{ data: Todo[] }>(
+            fql.Map(
+              fql.Paginate(
+                fql.Match(fql.Index('all_todos'))
+              ),
+              fql.Lambda('todo_ref', fql.Get(fql.Var('todo_ref')))
+            )
+          )).data;                
+          statusCode = 200;
+          break;
 
-  const {todos} = tables<DatabaseSchema>({
-  serializeValue,
-});
-try {
-  
+        // Create
+        case 'POST':
 
-  let match: RegExpMatchArray;
-  let result: Todos | Todos[];
-  let statusCode = 200;
+          result = await client.query<Todo>(
+            fql.Create(
+              fql.Collection("Todos"),
+              {
+                data: validatePayload(
+                  JSON.parse(event.body)
+                )
+              }
+            ))
+          
+          statusCode = 201;
+          break;
 
-  if (event.path.match(/^\/\.netlify\/functions\/[^\/]+$/)){
-    switch (event.httpMethod) {
-      case 'GET':
-        result = await todos(db).find().all();
-        break;
-      
-      case 'POST':
-    result = await todos(db).insert(JSON.parse(event.body));
-    statusCode = 201;
-      break;
-      
-      default:
-        throw new MethodNotAllowedException(event.httpMethod);
+        // Method not allowed
+        default:
+          throw new MethodNotAllowedException(event.httpMethod);
+      }
+
+    // If lambda was called with an ID
+    } else if (match = event.path.match(/^\/\.netlify\/functions\/[^\/]+\/(\d+)$/)) {
+      const id = match[1];
+      switch (event.httpMethod) {
+        // Find by ID
+        
+        case 'GET':
+          try {
+          result = (await client.query<Todo>(
+            fql.Get(
+              fql.Ref(
+                fql.Collection('Todos'), id)
+            )
+          ));
+          } catch (error) {
+            if(error.requestResult.statusCode === 404){
+              throw new NotFoundException();
+            }
+          }
+          break;
+
+        // Update
+        case 'PATCH':
+          partial = true;
+        case 'PUT':
+          try {
+          result = await client.query<Todo>(
+            fql.Update(
+              fql.Ref(
+                fql.Collection('Todos'), id),
+                {
+                  data: validatePayload(
+                    JSON.parse(event.body), partial
+                  )
+                }
+              )
+            )
+          } catch (error) {    
+            if(error.requestResult.statusCode === 404){
+              throw new NotFoundException();           
+          }
+          throw error;
+        }
+          
+          break;
+
+        // Delete
+        case 'DELETE':
+          try {
+            result = (await client.query<Todo>(
+            fql.Get(fql.Ref(fql.Collection('Todos'), id)
+            )
+          ));
+          } catch (error) {
+            if(error.requestResult.statusCode === 404){
+              throw new NotFoundException();
+            }
+          }
+
+          await client.query<Todo>(
+              fql.Delete(fql.Ref(fql.Collection('Todos'), id))
+            )
+            statusCode = 204;
+            result = null;
+          
+          break;
+
+        // Method not allowed
+        default:
+          throw new MethodNotAllowedException(event.httpMethod);
+      }
+    
+    // If lambda was called with inappropriate arguments
+    } else {
+      throw new NotFoundException();
     }
-  }
-  else if (match = event.path.match((/^\/\.netlify\/functions\/[^\/]+\/(\d+)$/))){
-    const id = Number(match[1]);
-    switch (event.httpMethod) {
-      case 'GET':
-        result = await todos(db).findOne({id});
-        if (typeof result === null){
-          statusCode = 404;
-        }
-        break;
-      
-      case 'PATCH':
-      case 'PUT':
-        result = await todos(db).update({id},JSON.parse(event.body));
-        if (typeof result === 'undefined'){
-          statusCode = 404;
-        }
-      break;
-
-      case 'DELETE':
-        result = await todos(db).findOne({id});
-        if (typeof result === null){
-          statusCode = 404;
-        }else{
-
-          await todos(db).delete({id});
-          result = null;
-          statusCode = 204;
-        }
-      break;
-
-      default:
-        throw new MethodNotAllowedException(event.httpMethod);
-    }
-  } else {
-    throw new NotFoundException();
-
-  }
-
-  await db.dispose();
-
-  return {
-    statusCode: statusCode,
-    body: result === null ? '' : JSON.stringify(result)
-  }
-  } catch (error) {
-  if (error instanceof MethodNotAllowedException){
-    return{
-      statusCode: 405,
+    
+    // Create HTTP response
+    return {
+      statusCode,
       headers: {
-        'Content-type':'application/json',
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({error : `The method ${event.httpMethod} is not allowed`})
+      body: result === null ? '' : JSON.stringify(result),
     }
   }
-  if (error instanceof NotFoundException){
-    return{
-      statusCode: 404,
-      headers: {
-        'Content-type':'application/json',
-      },
-      body: JSON.stringify({error : `Page not found`})
+  catch (error) {
+    if (error instanceof BadRequestException) {
+      return {
+        statusCode: 400,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ error: error.reason })
+      }
     }
+    if (error instanceof NotFoundException) {
+      return {
+        statusCode: 404,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ error: 'Resource not found.' })
+      }
+    }
+    if (error instanceof MethodNotAllowedException) {
+      return {
+        statusCode: 405,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ error: `Method ${error.httpMethod} not allowed.` })
+      }
+    }
+    throw error;
   }
-  throw error;
-}
 }

@@ -1,1 +1,1 @@
-export {default as TodoListPage} from './todo-list'
+export { default as TodoListPage } from './todo-list';
